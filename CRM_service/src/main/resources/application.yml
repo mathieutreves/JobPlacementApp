@@ -1,0 +1,55 @@
+spring:
+  application:
+    name: "CRM_service"
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    open-in-view: false
+    database-platform: "org.hibernate.dialect.PostgreSQLDialect"
+  datasource:
+    url: "jdbc:postgresql://crm_postgres:5432/mydatabase"
+    username: "myuser"
+    password: "secret"
+  mvc:
+    problemdetails:
+      enabled: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${ISSUER_URI}
+  kafka:
+    producer:
+      bootstrap-servers: ${KAFKA_URI}
+      client-id: producer
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+keycloak:
+  auth-server-url: ${AUTH_SERVER_URL}
+  realm: ${REALM_NAME}
+  client-id: ${CLIENT_ID}
+  client-secret: ${CLIENT_SECRET}
+
+server:
+  port : 8081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    metrics:
+      enabled: true
+    prometheus:
+      enabled: true
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  info:
+    env:
+      enabled: true

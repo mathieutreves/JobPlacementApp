@@ -1,0 +1,46 @@
+spring:
+  application:
+    name: API_GW_service
+  cloud:
+    gateway:
+      mvc:
+        http-client:
+          type: autodetect
+  security:
+    oauth2:
+      client:
+        provider:
+          keycloak:
+            issuer-uri: ${ISSUER_URI}
+        registration:
+          API_GatewayClient:
+            provider: keycloak
+            client-id: API_GatewayClient
+            client-secret: ${CLIENT_SECRET}
+            scope:
+              - openid
+              - offline_access
+            authorization-grant-type: authorization_code
+            redirect-uri: ${REDIRECT_URI}
+
+server:
+  port: ${SERVER_PORT}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    metrics:
+      enabled: true
+    prometheus:
+      enabled: true
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  info:
+    env:
+      enabled: true

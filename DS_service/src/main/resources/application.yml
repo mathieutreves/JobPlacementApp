@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: "ds_service"
+  jpa:
+    hibernate:
+      ddl-auto:
+    show-sql: true
+    open-in-view: false
+    database-platform: "org.hibernate.dialect.PostgreSQLDialect"
+  datasource:
+    url: "jdbc:postgresql://ds_postgres:5432/mydatabase"
+    username: "myuser"
+    password: "secret"
+  mvc:
+    problemdetails:
+      enabled: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${ISSUER_URI}
+server:
+  port: 8082
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    metrics:
+      enabled: true
+    prometheus:
+      enabled: true
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  info:
+    env:
+      enabled: true

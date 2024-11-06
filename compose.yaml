@@ -1,0 +1,401 @@
+services:
+
+# Postgres DB for DS service
+  ds-postgres:
+    container_name: ds-postgres
+    hostname: ds_postgres
+    image: 'postgres:latest'
+    restart: unless-stopped
+    environment:
+      - 'POSTGRES_DB=mydatabase'
+      - 'POSTGRES_PASSWORD=secret'
+      - 'POSTGRES_USER=myuser'
+    ports:
+      - '5432:5432'
+    command: [ "postgres", "-c", "wal_level=logical" ] # needed for kafka-connect debezium connector integration
+    networks:
+      - network
+
+# Postgres DB for CRM service
+  crm-postgres:
+    container_name: crm-postgres
+    hostname: crm_postgres
+    image: 'postgres:latest'
+    restart: unless-stopped
+    environment:
+      - 'POSTGRES_DB=mydatabase'
+      - 'POSTGRES_PASSWORD=secret'
+      - 'POSTGRES_USER=myuser'
+    ports:
+      - '5433:5432'
+    command: [ "postgres", "-c", "wal_level=logical" ] # needed for kafka-connect debezium connector integration
+    networks:
+      - network
+
+# Postgres DB for kafka service
+  kafka-postgres:
+    container_name: kafka-postgres
+    image: 'postgres:latest'
+    restart: unless-stopped
+    environment:
+      - 'POSTGRES_DB=mydatabase'
+      - 'POSTGRES_PASSWORD=secret'
+      - 'POSTGRES_USER=myuser'
+    ports:
+      - '5434:5432'
+    networks:
+      - network
+
+# Keycloak for authentication
+  keycloak:
+    container_name: keycloak
+    hostname: keycloak
+    image: keycloak/keycloak
+    restart: unless-stopped
+    healthcheck: # Health check that other containers can refer to, to know if keycloak has started and can be contacted
+      test:
+        [
+          "CMD-SHELL",
+          'exec 3<>/dev/tcp/localhost/8080; echo -e "GET /health/ready HTTP/1.1\nhost: localhost:8080\n" >&3; timeout --preserve-status 1 cat <&3 | grep -m 1 status | grep -m 1 UP; ERROR=$?; exec 3<&-; exec 3>&-; exit $ERROR'
+        ]
+    ports:
+      - '8080:8080'
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: password
+      API_GW_CLIENT_SECRET: ${API_GW_CLIENT_SECRET}
+      CAMEL_CLIENT_SECRET: ${CAMEL_CLIENT_SECRET}
+    command: start-dev --import-realm --metrics-enabled=true # Import default realm configuration and enable metrics for Prometheus
+    volumes:
+      - ${PROJECT_PATH}/imports:/opt/keycloak/data/import # Path to exported realm json config
+    networks:
+      - network
+
+# Document store service
+  ds-service:
+    container_name: ds-service
+    hostname: ds-service
+    image: 'com.example/ds_service:0.0.1-snapshot'
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      ds-postgres:
+        condition: service_started
+    environment:
+      ISSUER_URI: http://keycloak:8080/realms/API_Gateway
+    networks:
+      - network
+
+# Customer Relationship Management service
+  crm-service:
+    container_name: crm-service
+    hostname: crm-service
+    image: 'com.example/crm_service:0.0.1-snapshot'
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      crm-postgres:
+        condition: service_started
+    environment:
+      ISSUER_URI: http://keycloak:8080/realms/API_Gateway
+      CM_NOTIFY_URI: http://cm-service:8083/API/emails # URI to send an email through the CM service
+      AUTH_SERVER_URL: http://keycloak:8080
+      REALM_NAME: API_Gateway
+      CLIENT_ID: camel-service # Using camel client on keycloak
+      CLIENT_SECRET: ${CAMEL_CLIENT_SECRET}
+      KAFKA_URI: kafka:29092 # no HTTP for kafka connection
+    networks:
+      - network
+
+# Communication Manager service
+  cm-service:
+    container_name: cm-service
+    hostname: cm-service
+    image: 'com.example/cm_service:0.0.1-snapshot'
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      ISSUER_URI: http://keycloak:8080/realms/API_Gateway
+      KC_TOKEN_URI: http://keycloak:8080/realms/API_Gateway/protocol/openid-connect/token # Retrieve from keycloak an auth token to connect to other services
+      CRM_URI: http://crm-service:8081 # URI to add a message through the CRM service
+      CLIENT_ID: camel-service
+      CLIENT_SECRET: ${CAMEL_CLIENT_SECRET}
+      APPLICATION_NAME: ${GMAIL_APP_NAME} # Connection to Google Cloud project to read email from
+      GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID}
+      GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET}
+      GMAIL_REFRESH_TOKEN: ${GMAIL_REFRESH_TOKEN}
+    networks:
+      - network
+
+# API Gateway service
+  api-gw-service:
+    container_name: api-gw-service
+    hostname: api-gw-service
+    image: 'com.example/api_gw_service:0.0.1-snapshot'
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      CLIENT_SECRET: ${API_GW_CLIENT_SECRET}
+      ISSUER_URI: http://keycloak:8080/realms/API_Gateway
+      REDIRECT_URI: http://localhost:8088/login/oauth2/code/API_GatewayClient
+      SPA_URI: http://frontend:5173
+      CRM_URI: http://crm-service:8081
+      DS_URI: http://ds-service:8082
+      CM_URI: http://cm-service:8083
+      SERVER_PORT: 8088
+    networks:
+      - network
+
+# Analytics service
+  an-service:
+    container_name: an-service
+    hostname: an-service
+    image: 'com.example/an_service:0.0.1-snapshot'
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      ISSUER_URI: http://keycloak:8080/realms/API_Gateway
+      KAFKA_URI: kafka:29092 # no HTTP for kafka connection
+    networks:
+      - network
+
+# Kafka service
+  kafka:
+    container_name: kafka
+    hostname: kafka
+    image: 'bitnami/kafka:3.7'
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+      - "1099:1099"  # JMX port
+      - "8087:8080"  # JMX exporter port
+    volumes:
+      - kafka_data:/bitnami
+      - ${PROJECT_PATH}/jmx-exporter:/opt/jmx-exporter
+    environment:
+      KAFKA_CFG_NODE_ID: 0
+      KAFKA_CFG_PROCESS_ROLES: controller, broker
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:29092, CONTROLLER://:9093, PLAINTEXT_HOST://:9092
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092, PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT, CONTROLLER:PLAINTEXT, PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OPTS: "-javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-0.16.1.jar=8080:/opt/jmx-exporter/kafka-2_0_0.yml"
+      KAFKA_JMX_PORT: "1099"
+      KAFKA_JMX_OPTS: "-Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Djava.rmi.server.hostname=kafka -Dcom.sun.management.jmxremote.rmi.port=1099"
+    networks:
+      - network
+
+# Kafka UI service
+  kafka-ui:
+    container_name: kafka-ui
+    hostname: kafka-ui
+    image: 'provectuslabs/kafka-ui:latest'
+    restart: unless-stopped
+    ports:
+      - "9090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      DYNAMIC_CONFIG_ENABLED: 'true'
+    networks:
+      - network
+
+# Kafka connect service
+  kafka-connect:
+    container_name: kafka-connect
+    hostname: kafka-connect
+    image: 'confluentinc/cp-kafka-connect:latest'
+    restart: unless-stopped
+    ports:
+      - "8085:8083"
+    volumes:
+      - ${PROJECT_PATH}/load-kafka-connectors.sh:/etc/kafka-connect/load-kafka-connectors.sh # Path to a script to POST default connector endpoints after startup
+    depends_on:
+      kafka:
+        condition: service_started
+      kafka-postgres:
+        condition: service_started
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
+      CONNECT_REST_PORT: 8085
+      CONNECT_GROUP_ID: "connect1"
+      CONNECT_CONFIG_STORAGE_TOPIC: "connect1_config"
+      CONNECT_OFFSET_STORAGE_TOPIC: "connect1_offset"
+      CONNECT_STATUS_STORAGE_TOPIC: "connect1_status"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_REST_ADVERTISED_HOST_NAME: "localhost"
+      CONNECT_PLUGIN_PATH: '/usr/share/java, /etc/kafka-connect/jars, /usr/share/confluent-hub-components'
+    command: # Install connectors and POST custom endpoints
+      - bash
+      - -c
+      - |
+        echo "Installing Connector"
+        confluent-hub install --no-prompt debezium/debezium-connector-postgresql:2.2.1
+        confluent-hub install --no-prompt confluentinc/kafka-connect-datagen:0.4.0 confluent-hub install --no-prompt neo4j/kafka-connect-neo4j:2.0.0
+        #
+        echo "Launching Kafka Connect worker"
+        /etc/confluent/docker/run &
+        echo "Loading connector script ..."
+        /etc/kafka-connect/load-kafka-connectors.sh
+        #
+        sleep infinity
+    networks:
+      - network
+
+# Loki service
+  loki:
+    container_name: loki
+    hostname: loki
+    image: 'grafana/loki:latest'
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - ${PROJECT_PATH}/loki-config.yaml:/etc/loki/local-config.yaml  # custom config
+    command: -config.file=/etc/loki/local-config.yaml # Load custom configuration
+    networks:
+      - network
+
+# Promtail service
+  promtail:
+    container_name: promtail
+    hostname: promtail
+    image: 'grafana/promtail:latest'
+    restart: unless-stopped
+    volumes:
+      - ${PROJECT_PATH}/promtail-config.yaml:/etc/promtail/docker-config.yaml # custom config
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro # has to read from docker containers
+      - /var/run/docker.sock:/var/run/docker.sock # has to read from docker sockets
+    command: -config.file=/etc/promtail/docker-config.yaml
+    depends_on:
+      - loki
+    networks:
+      - network
+
+# Prometheus service
+  prometheus:
+    container_name: prometheus
+    hostname: prometheus
+    image: 'prom/prometheus:latest'
+    user: root # needed for docker broken permissions
+    restart: unless-stopped
+    ports:
+      - "9091:9090"
+    volumes:
+      - ${PROJECT_PATH}/prometheus-config.yaml:/etc/prometheus/prometheus.yml  # custom config
+      - /var/run/docker.sock:/var/run/docker.sock # has to read from docker sockets
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - network
+
+# Node exporter service
+  node-exporter:
+    container_name: node-exporter
+    hostname: node-exporter
+    image: 'prom/node-exporter:latest'
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - "9100:9100"
+    networks:
+      - network
+
+# cAdvisor service
+  cadvisor:
+    container_name: cadvisor
+    hostname: cadvisor
+    image: 'gcr.io/cadvisor/cadvisor:latest'
+    restart: unless-stopped
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "8089:8080"
+    networks:
+      - network
+
+# Grafana service
+  grafana:
+    container_name: grafana
+    hostname: grafana
+    image: 'grafana/grafana:latest'
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ${PROJECT_PATH}/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/grafana-datasources.yaml # custom config
+    depends_on:
+      - loki
+    networks:
+      - network
+
+# Frontend service
+  frontend:
+    container_name: frontend
+    hostname: frontend
+    restart: unless-stopped
+    build:
+      context: ./spa
+      dockerfile: Dockerfile # Dockerfile to build image
+    ports:
+      - "5173:5173"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    volumes:
+      - ${PROJECT_PATH}/spa:/app
+      - /app/node_modules
+    networks:
+     - network
+
+volumes:
+  kafka_data:
+    driver: local
+
+networks:
+  network:
+    driver: bridge
+    external: false
+    name: network

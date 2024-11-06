@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: "cm_service"
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${ISSUER_URI}
+
+camel:
+  component:
+    google-mail-stream:
+      application-name: ${APPLICATION_NAME}
+      client-id: ${GMAIL_CLIENT_ID}
+      client-secret: ${GMAIL_CLIENT_SECRET}
+      refresh-token: ${GMAIL_REFRESH_TOKEN}
+    google-mail:
+      application-name: ${APPLICATION_NAME}
+      client-id: ${GMAIL_CLIENT_ID}
+      client-secret: ${GMAIL_CLIENT_SECRET}
+      refresh-token: ${GMAIL_REFRESH_TOKEN}
+
+server:
+  port: 8083
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    metrics:
+      enabled: true
+    prometheus:
+      enabled: true
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  info:
+    env:
+      enabled: true
